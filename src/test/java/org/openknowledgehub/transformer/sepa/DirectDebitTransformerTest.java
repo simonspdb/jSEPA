@@ -1,12 +1,19 @@
 package org.openknowledgehub.transformer.sepa;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.openknowledgehub.api.assertions.JSepaAssertions.jSepaAssertThat;
+import static org.openknowledgehub.api.objects.DirectDebitTestProvider.DirectDebitPaymentTestProvider.AMOUNT;
+import static org.openknowledgehub.api.objects.DirectDebitTestProvider.DirectDebitPaymentTestProvider.DUE_AT;
 import static org.openknowledgehub.api.objects.DirectDebitTestProvider.MESSAGE_IDENTIFICATION;
 
+import org.openknowledgehub.api.objects.MandateTestProvider;
 import org.openknowledgehub.api.objects.TestObjects;
 import org.openknowledgehub.data.directdebit.DirectDebitDocumentBuilder;
 import org.openknowledgehub.data.directdebit.DirectDebitDocumentData;
+import org.openknowledgehub.data.directdebit.MandateBuilder;
+import org.openknowledgehub.data.directdebit.MandateType;
 import org.openknowledgehub.transformer.JSepaTransformer;
+import java.math.BigDecimal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -43,5 +50,58 @@ class DirectDebitTransformerTest {
     final var transformedXml = underTest.transform(directDebitDocumentData);
 
     jSepaAssertThat(transformedXml).contains("<SvcLvl>").contains("<Cd>SEPA</Cd>");
+  }
+
+  @Test
+  @DisplayName("Should transform using pain.008.001.02 template")
+  void testTransformPain00800102() {
+    final var transformedXml =
+        new DirectDebitTransformer(DirectDebitTransformer.Version.PAIN_008_001_02)
+            .transform(TestObjects.directDebit().document().defaultDocument());
+
+    assertThat(transformedXml)
+        .contains("urn:iso:std:iso:20022:tech:xsd:pain.008.001.02")
+        .contains("<BIC>")
+        .contains("<BtchBookg>true</BtchBookg>")
+        .contains("<ChrgBr>SLEV</ChrgBr>")
+        .containsOnlyOnce("<PmtInf>")
+        .doesNotContain("<BICFI>");
+  }
+
+  @Test
+  @DisplayName("Should group multiple direct debit transactions within a single PmtInf for pain.008.001.02")
+  void testTransformPain00800102MultiplePayments() {
+    final var secondPaymentBuilder =
+        TestObjects.directDebit()
+            .payment()
+            .defaultBuilder()
+            .withIdentification("second-payment")
+            .withAmount(BigDecimal.valueOf(7.89))
+            .withDirectDebitDueAt(DUE_AT.plusDays(1))
+            .withMandate(
+                MandateBuilder.withMandate("second-mandate")
+                    .withMandateIssuedAt(MandateTestProvider.ISSUED_AT.plusDays(5))
+                    .withMandateType(MandateType.RECURRING)
+                    .build());
+
+    final var document =
+        DirectDebitDocumentBuilder.create(MESSAGE_IDENTIFICATION)
+            .withCreditor(TestObjects.accountIdentification().defaultAccount())
+            .addPayment(TestObjects.directDebit().payment().defaultBuilder())
+            .addPayment(secondPaymentBuilder)
+            .build();
+
+    final var transformedXml =
+        new DirectDebitTransformer(DirectDebitTransformer.Version.PAIN_008_001_02)
+            .transform(document);
+
+    final var expectedCtrlSum = AMOUNT.add(BigDecimal.valueOf(7.89)).toPlainString();
+
+    assertThat(transformedXml)
+        .containsOnlyOnce("<PmtInf>")
+        .contains("<NbOfTxs>2</NbOfTxs>")
+        .contains("<CtrlSum>" + expectedCtrlSum + "</CtrlSum>")
+        .contains("second-mandate")
+        .contains("MandateId");
   }
 }
